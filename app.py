@@ -7,225 +7,228 @@ import plotly.graph_objects as go
 import plotly.express as px
 from functools import reduce
 
-# --- Page Configuration ---
-st.set_page_config(page_title="SKU Sales Merger", layout="wide")
+# --- Configuração da Página ---
+st.set_page_config(page_title="Analisador de Vendas de SKU", layout="wide")
 
-# --- Helper Functions ---
+# --- Funções Auxiliares ---
 
 @st.cache_data
-def process_files(uploaded_files):
+def processar_arquivos(arquivos_enviados):
     """
-    Reads, validates, and merges uploaded Excel files into a single DataFrame.
+    Lê, valida e consolida os arquivos Excel enviados em um único DataFrame.
     """
-    def extract_date_from_filename(filename):
-        match = re.search(r'M(\d+)-(\d+)', filename)
+    def extrair_data_do_nome_arquivo(nome_arquivo):
+        match = re.search(r'M(\d+)-(\d+)', nome_arquivo)
         if match:
-            month, year = map(int, match.groups())
-            return datetime(2000 + year, month, 1), f"M{month}-{year}"
-        return None, filename
+            mes, ano = map(int, match.groups())
+            return datetime(2000 + ano, mes, 1), f"M{mes}-{ano}"
+        return None, nome_arquivo
 
     data_frames = []
-    for file in uploaded_files:
+    for arquivo in arquivos_enviados:
         try:
-            date_obj, date_label = extract_date_from_filename(file.name)
+            date_obj, date_label = extrair_data_do_nome_arquivo(arquivo.name)
             if not date_obj:
-                st.warning(f"⚠️ Could not extract date from filename: {file.name}")
+                st.warning(f"⚠️ Não foi possível extrair a data do nome do arquivo: {arquivo.name}")
                 continue
             
-            df = pd.read_excel(file, usecols=['SKU', 'Quantidade vendida'])
+            df = pd.read_excel(arquivo, usecols=['SKU', 'Quantidade vendida'])
             df.rename(columns={'Quantidade vendida': date_label}, inplace=True)
             data_frames.append((date_obj, df))
         except (ValueError, KeyError):
-            st.error(f"❌ File '{file.name}' is missing required columns (SKU, Quantidade vendida).")
+            st.error(f"❌ O arquivo '{arquivo.name}' não possui as colunas obrigatórias (SKU, Quantidade vendida).")
         except Exception as e:
-            st.error(f"❌ Error processing file '{file.name}': {e}")
+            st.error(f"❌ Erro ao processar o arquivo '{arquivo.name}': {e}")
 
     if not data_frames:
         return None, None
 
-    # Sort files chronologically
+    # Ordenar arquivos cronologicamente
     data_frames.sort(key=lambda x: x[0])
     
-    # Extract sorted dataframes and month columns
-    sorted_dfs = [df for _, df in data_frames]
-    month_columns = [df.columns[1] for df in sorted_dfs]
+    # Extrair dataframes e nomes das colunas de meses
+    dfs_ordenados = [df for _, df in data_frames]
+    colunas_meses = [df.columns[1] for df in dfs_ordenados]
 
-    # Merge all dataframes efficiently
-    merged_df = reduce(lambda left, right: pd.merge(left, right, on='SKU', how='outer'), sorted_dfs)
-    merged_df = merged_df.fillna(0).sort_values('SKU').reset_index(drop=True)
-    merged_df[month_columns] = merged_df[month_columns].astype(int)
+    # Consolidar todos os dataframes de forma eficiente
+    df_consolidado = reduce(lambda left, right: pd.merge(left, right, on='SKU', how='outer'), dfs_ordenados)
+    df_consolidado = df_consolidado.fillna(0).sort_values('SKU').reset_index(drop=True)
+    df_consolidado[colunas_meses] = df_consolidado[colunas_meses].astype(int)
     
-    return merged_df, month_columns
+    return df_consolidado, colunas_meses
 
-def create_long_format_df(df, selected_skus, month_columns):
+def criar_df_formato_longo(df, skus_selecionados, colunas_meses):
     """
-    Converts the wide-format DataFrame to a long format for easier plotting.
+    Converte o DataFrame de formato "largo" para "longo" para facilitar a plotagem.
     """
-    return df[df['SKU'].isin(selected_skus)].melt(
+    return df[df['SKU'].isin(skus_selecionados)].melt(
         id_vars=['SKU'], 
-        value_vars=month_columns, 
-        var_name='Month', 
-        value_name='Sales'
+        value_vars=colunas_meses, 
+        var_name='Mês', 
+        value_name='Vendas'
     )
 
-def create_download_file(df, month_columns):
+def criar_arquivo_download(df, colunas_meses):
     """
-    Creates an in-memory Excel file for downloading.
+    Cria um arquivo Excel em memória para download.
     """
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df.to_excel(writer, index=False, sheet_name='Merged Sales Data')
-        # Add summary sheet
-        summary_df = df[month_columns].sum().reset_index()
-        summary_df.columns = ['Month', 'Total Sales']
-        summary_df.to_excel(writer, index=False, sheet_name='Monthly Summary')
+        df.to_excel(writer, index=False, sheet_name='Dados de Vendas Consolidados')
+        # Adicionar aba de resumo
+        df_resumo = df[colunas_meses].sum().reset_index()
+        df_resumo.columns = ['Mês', 'Vendas Totais']
+        df_resumo.to_excel(writer, index=False, sheet_name='Resumo Mensal')
     return output.getvalue()
 
-# --- UI Layout Functions ---
+# --- Funções de Layout da UI ---
 
-def display_welcome_message():
-    """Shows instructions when no files are uploaded."""
-    st.info("👆 Please upload your monthly sales files to begin.")
-    with st.expander("ℹ️ How to use this tool & file structure"):
+def exibir_mensagem_boas_vindas():
+    """Mostra instruções quando nenhum arquivo é enviado."""
+    st.info("👆 Por favor, envie seus arquivos de vendas mensais para começar.")
+    with st.expander("ℹ️ Como usar a ferramenta e estrutura dos arquivos"):
         st.markdown("""
-        ### 📖 Instructions:
-        1. **Upload Files**: Drag and drop multiple `.xls` or `.xlsx` files.
-        2. **File Naming**: Files must follow the format `M[month]-[year]` (e.g., `M7-25.xls`).
-        3. **Required Columns**: Each file must contain `SKU` and `Quantidade vendida`.
-        4. **Analyze & Download**: Use the tabs to visualize data and download the merged results.
+        ### 📖 Instruções:
+        1. **Envie os Arquivos**: Arraste e solte múltiplos arquivos `.xls` ou `.xlsx`.
+        2. **Nomenclatura**: Os arquivos devem seguir o formato `M[mês]-[ano]` (ex: `M7-25.xls`).
+        3. **Colunas Obrigatórias**: Cada arquivo deve conter as colunas `SKU` e `Quantidade vendida`.
+        4. **Analise e Baixe**: Use as abas para visualizar os dados e baixar os resultados consolidados.
         
-        ### 📋 Expected File Structure:
+        ### 📋 Estrutura Esperada do Arquivo:
         | SKU | Quantidade vendida | ... |
         |---|---|---|
         | ABC123 | 150 | ... |
         """)
 
-def display_main_dashboard(df, month_columns):
-    """Renders the entire dashboard after files are processed."""
+def exibir_painel_principal(df, colunas_meses):
+    """Renderiza todo o painel após o processamento dos arquivos."""
     
-    # --- Metrics ---
-    st.subheader("🚀 Dashboard Summary")
+    # --- Métricas ---
+    st.subheader("🚀 Resumo do Painel")
     col1, col2, col3 = st.columns(3)
-    col1.metric("📁 Files Processed", len(month_columns))
-    col2.metric("🏷️ Unique SKUs", df['SKU'].nunique())
-    col3.metric("📅 Months Covered", " → ".join(month_columns))
+    col1.metric("📁 Arquivos Processados", len(colunas_meses))
+    col2.metric("🏷️ SKUs Únicos", df['SKU'].nunique())
+    col3.metric("📅 Meses Analisados", " → ".join(colunas_meses))
 
     st.markdown("---")
 
-    # --- Central SKU Selector ---
-    st.sidebar.header("⚙️ Controls")
-    all_skus = sorted(df['SKU'].unique().tolist())
-    default_skus = all_skus[:5] if len(all_skus) >= 5 else all_skus
-    selected_skus = st.sidebar.multiselect("🎯 Select SKUs to Visualize", all_skus, default=default_skus)
+    # --- Seletor Central de SKU ---
+    st.sidebar.header("⚙️ Controles")
+    todos_skus = sorted(df['SKU'].unique().tolist())
+    skus_padrao = todos_skus[:5] if len(todos_skus) >= 5 else todos_skus
+    skus_selecionados = st.sidebar.multiselect("🎯 Selecione os SKUs para Visualizar", todos_skus, default=skus_padrao)
 
-    if not selected_skus:
-        st.warning("Please select at least one SKU from the sidebar to see the charts.")
+    if not skus_selecionados:
+        st.warning("Por favor, selecione ao menos um SKU na barra lateral para ver os gráficos.")
         return
 
-    # Prepare data for charts
-    long_df = create_long_format_df(df, selected_skus, month_columns)
+    # Preparar dados para os gráficos
+    df_longo = criar_df_formato_longo(df, skus_selecionados, colunas_meses)
     
-    # --- Tabs for Visualizations ---
-    tab1, tab2, tab3, tab4 = st.tabs(["📊 Animated Progression", "📈 Static Comparison", "🔥 Heatmap", "🏆 Top SKUs Race"])
+    # --- Abas para Visualizações ---
+    tab1, tab2, tab3, tab4 = st.tabs(["📊 Progressão Animada", "📈 Comparação Estática", "🔥 Mapa de Calor", "🏆 Corrida de Top SKUs"])
 
     with tab1:
-        st.subheader("Animated SKU Sales Progression")
-        animation_speed = st.sidebar.slider("⚡ Animation Speed (ms)", 200, 2000, 800, 200)
+        st.subheader("Progressão Animada de Vendas por SKU")
+        velocidade_animacao = st.sidebar.slider("⚡ Velocidade da Animação (ms)", 200, 2000, 800, 200)
 
         fig = px.line(
-            long_df, x='Month', y='Sales', color='SKU', markers=True,
-            animation_frame='Month', animation_group='SKU',
-            range_y=[0, long_df['Sales'].max() * 1.1],
-            title='📈 SKU Sales Progression Over Time'
+            df_longo, x='Mês', y='Vendas', color='SKU', markers=True,
+            animation_frame='Mês', animation_group='SKU',
+            range_y=[0, df_longo['Vendas'].max() * 1.1],
+            title='📈 Progressão de Vendas de SKU ao Longo do Tempo',
+            labels={'Vendas': 'Quantidade Vendida', 'Mês': 'Mês'}
         )
-        fig.update_layout(transition={'duration': animation_speed}, height=500)
-        fig.layout.updatemenus[0].buttons[0].args[1]['frame']['duration'] = animation_speed
+        fig.update_layout(transition={'duration': velocidade_animacao}, height=500)
+        fig.layout.updatemenus[0].buttons[0].args[1]['frame']['duration'] = velocidade_animacao
         st.plotly_chart(fig, use_container_width=True)
 
-        st.subheader("📊 Selected SKU Statistics")
-        stats_df = df[df['SKU'].isin(selected_skus)].set_index('SKU')
+        st.subheader("📊 Estatísticas dos SKUs Selecionados")
+        stats_df = df[df['SKU'].isin(skus_selecionados)].set_index('SKU')
         stats = pd.DataFrame({
-            'Total Sales': stats_df[month_columns].sum(axis=1),
-            'Average Sales': stats_df[month_columns].mean(axis=1).round(2),
-            'Max Sales': stats_df[month_columns].max(axis=1),
-            'Min Sales': stats_df[month_columns].min(axis=1),
+            'Vendas Totais': stats_df[colunas_meses].sum(axis=1),
+            'Média de Vendas': stats_df[colunas_meses].mean(axis=1).round(2),
+            'Venda Máxima': stats_df[colunas_meses].max(axis=1),
+            'Venda Mínima': stats_df[colunas_meses].min(axis=1),
         })
         st.dataframe(stats, use_container_width=True)
 
     with tab2:
-        st.subheader("Full SKU Sales Comparison")
+        st.subheader("Comparação Completa de Vendas por SKU")
         fig = px.line(
-            long_df, x='Month', y='Sales', color='SKU', markers=True, text='Sales',
-            title='📊 SKU Sales Comparison - Full View'
+            df_longo, x='Mês', y='Vendas', color='SKU', markers=True, text='Vendas',
+            title='📊 Comparação de Vendas de SKU - Visão Completa',
+            labels={'Vendas': 'Quantidade Vendida', 'Mês': 'Mês'}
         )
         fig.update_traces(textposition="top center")
         fig.update_layout(height=500)
         st.plotly_chart(fig, use_container_width=True)
 
     with tab3:
-        st.subheader("SKU Sales Heatmap")
-        heatmap_df = df[df['SKU'].isin(selected_skus)].set_index('SKU')[month_columns]
+        st.subheader("Mapa de Calor de Vendas por SKU")
+        df_heatmap = df[df['SKU'].isin(skus_selecionados)].set_index('SKU')[colunas_meses]
         fig = px.imshow(
-            heatmap_df, text_auto=True, aspect="auto",
-            labels=dict(x="Month", y="SKU", color="Sales"),
-            title='🔥 SKU Sales Heatmap'
+            df_heatmap, text_auto=True, aspect="auto",
+            labels=dict(x="Mês", y="SKU", color="Vendas"),
+            title='🔥 Mapa de Calor de Vendas por SKU'
         )
-        fig.update_layout(height=max(300, len(selected_skus) * 40))
+        fig.update_layout(height=max(300, len(skus_selecionados) * 40))
         st.plotly_chart(fig, use_container_width=True)
 
     with tab4:
-        st.subheader("Top SKUs Race by Month")
-        top_n = st.sidebar.slider("🏅 Show Top N SKUs", 5, 20, 10, 5)
+        st.subheader("Corrida dos Top SKUs por Mês")
+        top_n = st.sidebar.slider("🏅 Exibir Top N SKUs", 5, 20, 10, 5)
         
-        race_data = pd.concat([
-            df[['SKU', month]].nlargest(top_n, month).assign(Month=month).rename(columns={month: 'Sales'})
-            for month in month_columns
+        dados_corrida = pd.concat([
+            df[['SKU', mes]].nlargest(top_n, mes).assign(Mês=mes).rename(columns={mes: 'Vendas'})
+            for mes in colunas_meses
         ])
         
         fig = px.bar(
-            race_data, x='Sales', y='SKU', color='SKU', orientation='h',
-            animation_frame='Month', title=f'🏆 Top {top_n} SKUs by Month'
+            dados_corrida, x='Vendas', y='SKU', color='SKU', orientation='h',
+            animation_frame='Mês', title=f'🏆 Top {top_n} SKUs por Mês',
+            labels={'Vendas': 'Quantidade Vendida', 'Mês': 'Mês'}
         )
         fig.update_layout(yaxis={'categoryorder':'total ascending'}, showlegend=False, height=600)
         st.plotly_chart(fig, use_container_width=True)
 
-    # --- Data Table & Download Section ---
+    # --- Tabela de Dados e Seção de Download ---
     st.markdown("---")
-    st.header("📋 Complete Merged Data Table")
-    search_term = st.text_input("🔍 Search SKU", placeholder="Type to filter SKUs...")
-    display_df = df[df['SKU'].astype(str).str.contains(search_term, case=False)] if search_term else df
-    st.dataframe(display_df, use_container_width=True, height=400)
+    st.header("📋 Tabela de Dados Consolidados")
+    termo_busca = st.text_input("🔍 Buscar SKU", placeholder="Digite para filtrar SKUs...")
+    df_exibicao = df[df['SKU'].astype(str).str.contains(termo_busca, case=False)] if termo_busca else df
+    st.dataframe(df_exibicao, use_container_width=True, height=400)
 
-    st.header("⬇️ Download Options")
-    excel_data = create_download_file(df, month_columns)
+    st.header("⬇️ Opções de Download")
+    dados_excel = criar_arquivo_download(df, colunas_meses)
     st.download_button(
-        label="📥 Download Full Data (Excel)",
-        data=excel_data,
-        file_name="merged_sku_sales.xlsx",
+        label="📥 Baixar Dados Completos (Excel)",
+        data=dados_excel,
+        file_name="vendas_sku_consolidadas.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
 
-# --- Main App ---
+# --- App Principal ---
 def main():
-    st.title("📊 SKU Sales Data Merger & Analyzer")
-    st.markdown("Upload your monthly sales files (format: `M7-25.xls`) to merge and analyze SKU progression.")
+    st.title("📊 Consolidador e Analisador de Vendas por SKU")
+    st.markdown("Envie seus arquivos de vendas mensais (formato: `M7-25.xls`) para consolidar e analisar a progressão.")
 
-    uploaded_files = st.file_uploader(
-        "📁 Drop your .xls/.xlsx files here",
+    arquivos_enviados = st.file_uploader(
+        "📁 Arraste e solte seus arquivos .xls/.xlsx aqui",
         type=['xls', 'xlsx'],
         accept_multiple_files=True
     )
 
-    if uploaded_files:
-        merged_df, month_columns = process_files(uploaded_files)
-        if merged_df is not None:
-            display_main_dashboard(merged_df, month_columns)
+    if arquivos_enviados:
+        df_consolidado, colunas_meses = processar_arquivos(arquivos_enviados)
+        if df_consolidado is not None:
+            exibir_painel_principal(df_consolidado, colunas_meses)
     else:
-        display_welcome_message()
+        exibir_mensagem_boas_vindas()
 
-    # --- Footer ---
+    # --- Rodapé ---
     st.markdown("---")
-    st.markdown("<div style='text-align: center; color: #666;'><p>Made with ❤️ using Streamlit & Plotly</p></div>", unsafe_allow_html=True)
+    st.markdown("<div style='text-align: center; color: #666;'><p>Feito com ❤️ usando Streamlit & Plotly</p></div>", unsafe_allow_html=True)
 
 
 if __name__ == "__main__":
