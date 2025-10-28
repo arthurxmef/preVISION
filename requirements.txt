@@ -1,4 +1,19 @@
+# requirements.txt
+
+# For creating the web application interface
 streamlit
+
+# For data manipulation and analysis (DataFrames)
 pandas
+
+# For creating interactive plots and charts
 plotly
+
+# Required by pandas to read and write Excel .xlsx files
 openpyxl
+
+# For numerical operations and array handling
+numpy
+
+# For scientific and technical computing, used here for optimization
+scipy
